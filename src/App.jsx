@@ -127,183 +127,207 @@ export default function App() {
                 }
               );
               log("Notifications enabled", ch.uuid);
-            } catch (error) {
-              log("Notification setup failed", {
-                uuid: ch.uuid,
-                error: error.message,
-              });
             }
-          }
-        }
 
-        result.push({
-          uuid: service.uuid,
-          characteristics: chars,
-        });
+            // catch (error) {
+            //   log("Notification setup failed", {
+            //     uuid: ch.uuid,
+            //     error: error.message,
+            //   });
+            // }
+
+
+ catch (error) {
+            if (
+              error.name === "NotFoundError" &&
+              /cancel/i.test(error.message)
+            ) {
+              log("Bluetooth chooser cancelled by user");
+              setStatus("Selection cancelled — tap Scan & Connect to retry");
+            } else {
+              log("Bluetooth operation failed", {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+              });
+              setStatus(`${error.name}: ${error.message}`);
+            }
+          } finally {
+            setBusy(false);
+          }
+
+        }
       }
+
+      result.push({
+        uuid: service.uuid,
+        characteristics: chars,
+      });
+    }
 
       setServices(result);
-      setStatus(
-        `Connected — found ${result.length} services`
+    setStatus(
+      `Connected — found ${result.length} services`
+    );
+    log("Discovery complete", result);
+  } catch (error) {
+    log("Bluetooth operation failed", {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    });
+    setStatus(`${error.name}: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function readCharacteristic(serviceUUID, charUUID) {
+  try {
+    const device = deviceRef.current;
+    if (!device?.gatt?.connected) {
+      throw new Error("Connect to the device first");
+    }
+
+    const service =
+      await serverRef.current.getPrimaryService(
+        serviceUUID
       );
-      log("Discovery complete", result);
-    } catch (error) {
-      log("Bluetooth operation failed", {
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-      });
-      setStatus(`${error.name}: ${error.message}`);
-    } finally {
-      setBusy(false);
+    const characteristic =
+      await service.getCharacteristic(charUUID);
+
+    if (!characteristic.properties.read) {
+      throw new Error("Characteristic is not readable");
     }
+
+    const value = await characteristic.readValue();
+    const bytes = Array.from(
+      new Uint8Array(
+        value.buffer,
+        value.byteOffset,
+        value.byteLength
+      )
+    );
+
+    log("Read successful", {
+      serviceUUID,
+      charUUID,
+      bytes,
+    });
+  } catch (error) {
+    log("Read failed", error);
+    setStatus(error.message);
   }
+}
 
-  async function readCharacteristic(serviceUUID, charUUID) {
-    try {
-      const device = deviceRef.current;
-      if (!device?.gatt?.connected) {
-        throw new Error("Connect to the device first");
-      }
-
-      const service =
-        await serverRef.current.getPrimaryService(
-          serviceUUID
-        );
-      const characteristic =
-        await service.getCharacteristic(charUUID);
-
-      if (!characteristic.properties.read) {
-        throw new Error("Characteristic is not readable");
-      }
-
-      const value = await characteristic.readValue();
-      const bytes = Array.from(
-        new Uint8Array(
-          value.buffer,
-          value.byteOffset,
-          value.byteLength
-        )
-      );
-
-      log("Read successful", {
-        serviceUUID,
-        charUUID,
-        bytes,
-      });
-    } catch (error) {
-      log("Read failed", error);
-      setStatus(error.message);
-    }
+function disconnect() {
+  log("Disconnect requested");
+  if (deviceRef.current?.gatt?.connected) {
+    deviceRef.current.gatt.disconnect();
   }
+  serverRef.current = null;
+  setServices([]);
+  setStatus("Disconnected");
+  setDeviceName("");
+}
 
-  function disconnect() {
-    log("Disconnect requested");
-    if (deviceRef.current?.gatt?.connected) {
-      deviceRef.current.gatt.disconnect();
-    }
-    serverRef.current = null;
-    setServices([]);
-    setStatus("Disconnected");
-  }
+return (
+  <main className="app">
+    <header>
+      <p className="eyebrow">BLUETOOTH LAB</p>
+      <h1>TB-21 Controller</h1>
+      <p>BLE discovery and protocol diagnostics</p>
+    </header>
 
-  return (
-    <main className="app">
-      <header>
-        <p className="eyebrow">BLUETOOTH LAB</p>
-        <h1>TB-21 Controller</h1>
-        <p>BLE discovery and protocol diagnostics</p>
-      </header>
+    <section className="panel">
+      <div className="status">
+        <span className="dot" />
+        <span>{status}</span>
+      </div>
 
-      <section className="panel">
-        <div className="status">
-          <span className="dot" />
-          <span>{status}</span>
-        </div>
-
-        <p>Device: {deviceName || "Not selected"}</p>
-        <p className="muted">
-          Secure context:{" "}
-          {String(
-            typeof window !== "undefined" &&
-            window.isSecureContext
-          )}
-        </p>
-
-        <button
-          onClick={scanAndConnect}
-          disabled={busy}
-        >
-          {busy ? "Working…" : "Scan & Connect"}
-        </button>
-
-        <button
-          className="secondary"
-          onClick={disconnect}
-        >
-          Disconnect
-        </button>
-      </section>
-
-      <section className="panel">
-        <h2>Volume test</h2>
-        <p className="muted">
-          Volume commands are disabled until we identify
-          the device protocol and correct command format.
-        </p>
-
-        <div className="volume-controls">
-          <button disabled>− Volume</button>
-          <button disabled>+ Volume</button>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>GATT services</h2>
-
-        {services.length === 0 && (
-          <p className="muted">
-            Connect to inspect discovered services.
-          </p>
+      <p>Device: {deviceName || "Not selected"}</p>
+      <p className="muted">
+        Secure context:{" "}
+        {String(
+          typeof window !== "undefined" &&
+          window.isSecureContext
         )}
-
-        {services.map((service) => (
-          <article className="service" key={service.uuid}>
-            <strong>{service.uuid}</strong>
-
-            {service.characteristics.map((ch) => (
-              <div className="characteristic" key={ch.uuid}>
-                <code>{ch.uuid}</code>
-                <p>
-                  {Object.entries(ch.properties)
-                    .filter(([, enabled]) => enabled)
-                    .map(([name]) => name)
-                    .join(", ") || "No exposed properties"}
-                </p>
-
-                {ch.properties.read && (
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      readCharacteristic(
-                        service.uuid,
-                        ch.uuid
-                      )
-                    }
-                  >
-                    Read value
-                  </button>
-                )}
-              </div>
-            ))}
-          </article>
-        ))}
-      </section>
-
-      <p className="footer">
-        Open DevTools → Console on desktop to inspect logs.
-        On Android, use remote debugging from desktop Chrome.
       </p>
-    </main>
-  );
+
+      <button
+        onClick={scanAndConnect}
+        disabled={busy}
+      >
+        {busy ? "Working…" : "Scan & Connect"}
+      </button>
+
+      <button
+        className="secondary"
+        onClick={disconnect}
+      >
+        Disconnect
+      </button>
+    </section>
+
+    <section className="panel">
+      <h2>Volume test</h2>
+      <p className="muted">
+        Volume commands are disabled until we identify
+        the device protocol and correct command format.
+      </p>
+
+      <div className="volume-controls">
+        <button disabled>− Volume</button>
+        <button disabled>+ Volume</button>
+      </div>
+    </section>
+
+    <section className="panel">
+      <h2>GATT services</h2>
+
+      {services.length === 0 && (
+        <p className="muted">
+          Connect to inspect discovered services.
+        </p>
+      )}
+
+      {services.map((service) => (
+        <article className="service" key={service.uuid}>
+          <strong>{service.uuid}</strong>
+
+          {service.characteristics.map((ch) => (
+            <div className="characteristic" key={ch.uuid}>
+              <code>{ch.uuid}</code>
+              <p>
+                {Object.entries(ch.properties)
+                  .filter(([, enabled]) => enabled)
+                  .map(([name]) => name)
+                  .join(", ") || "No exposed properties"}
+              </p>
+
+              {ch.properties.read && (
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    readCharacteristic(
+                      service.uuid,
+                      ch.uuid
+                    )
+                  }
+                >
+                  Read value
+                </button>
+              )}
+            </div>
+          ))}
+        </article>
+      ))}
+    </section>
+
+    <p className="footer">
+      Open DevTools → Console on desktop to inspect logs.
+      On Android, use remote debugging from desktop Chrome.
+    </p>
+  </main>
+);
 }
